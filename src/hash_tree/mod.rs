@@ -3,7 +3,6 @@
     missing_copy_implementations,
     trivial_casts,
     trivial_numeric_casts,
-    unsafe_code,
     unstable_features,
     unused_import_braces,
     unused_qualifications,
@@ -18,12 +17,122 @@ enum TreePointer<K, V> {
 }
 
 impl<K, V> TreePointer<K, V> {
+    fn take(&mut self) -> Self {
+        use TreePointer::*;
+
+        match self {
+            Empty => Self::Empty,
+            NonEmpty(_) => std::mem::replace(self, Empty),
+        }
+    }
+
+    fn unwrap(self) -> Box<TreeNode<K, V>> {
+        match self {
+            TreePointer::NonEmpty(val) => val,
+            TreePointer::Empty => {
+                panic!("called `TreePointer::unwrap()` on a `Empty` value")
+            }
+        }
+    }
+
+    fn is_non_empty(&self) -> bool {
+        match self {
+            TreePointer::Empty => false,
+            TreePointer::NonEmpty(_) => true,
+        }
+    }
+
+    fn as_ref(&self) -> Option<&Box<TreeNode<K, V>>> {
+        match *self {
+            TreePointer::Empty => None,
+            TreePointer::NonEmpty(ref node) => Some(node),
+        }
+    }
+
+    fn as_mut(&mut self) -> Option<&mut Box<TreeNode<K, V>>> {
+        match *self {
+            TreePointer::NonEmpty(ref mut x) => Some(x),
+            TreePointer::Empty => None,
+        }
+    }
+
+    fn replace(&mut self, new: TreePointer<K, V>) -> TreePointer<K, V> {
+        std::mem::replace(self, new)
+    }
+
     fn iter(&self) -> TreeIter<K, V> {
         let mut iter = TreeIter {
             unvisited: Vec::new(),
         };
         iter.push_left_edge(self);
         iter
+    }
+
+    fn extract_min(&mut self) -> Option<(K, u64, V)> {
+        let mut node = None;
+
+        if self.is_non_empty() {
+            let mut current = self;
+
+            while current.as_ref().unwrap().left.is_non_empty() {
+                current = &mut current.as_mut().unwrap().left;
+            }
+
+            let temp = current.take().unwrap();
+            node = Some((temp.key, temp.hash, temp.value));
+            let _ = std::mem::replace(current, temp.right);
+        }
+        node
+    }
+
+    fn remove(&mut self, hash: u64) -> Option<TreePointer<K, V>> {
+        use TreePointer::*;
+
+        let mut current = self;
+
+        let mut result = None;
+
+        while let NonEmpty(ref mut node) = current {
+            match node.hash.cmp(&hash) {
+                std::cmp::Ordering::Less => {
+                    current = &mut current.as_mut().unwrap().right
+                }
+                std::cmp::Ordering::Greater => {
+                    current = &mut current.as_mut().unwrap().left
+                }
+                std::cmp::Ordering::Equal => {
+                    match (node.left.as_mut(), node.right.as_mut()) {
+                        (None, None) => {
+                            result = Some(current.replace(Empty));
+                        }
+                        (Some(_), None) => {
+                            let take = node.left.take();
+                            result = Some(current.replace(take));
+                        }
+                        (None, Some(_)) => {
+                            let take = node.right.take();
+                            result = Some(current.replace(take));
+                        }
+                        (Some(_), Some(_)) => {
+                            let mut temp = node.right.extract_min().unwrap();
+                            let cur = current.as_mut().unwrap();
+                            std::mem::swap(&mut cur.key, &mut temp.0);
+                            std::mem::swap(&mut cur.hash, &mut temp.1);
+                            std::mem::swap(&mut cur.value, &mut temp.2);
+
+                            result = Some(NonEmpty(Box::new(TreeNode {
+                                key: temp.0,
+                                hash: temp.1,
+                                value: temp.2,
+                                left: Empty,
+                                right: Empty,
+                            })));
+                        }
+                    }
+                }
+            }
+        }
+        result
     }
 }
 
@@ -181,8 +290,18 @@ where
     }
 
     /// Remove pair from `HashTree`, returns value, or None if not present.
-    pub fn remove<Q: ?Sized>(&mut self, _key: &Q) -> Option<V> {
-        None
+    pub fn remove<Q: ?Sized>(&mut self, key: &Q) -> Option<V>
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: std::hash::Hash + Eq,
+    {
+        match self.root.remove(self.state.hash_one(key)) {
+            Some(inner) => match inner {
+                TreePointer::Empty => None,
+                TreePointer::NonEmpty(node) => Some(node.value),
+            },
+            None => None,
+        }
     }
 
     fn find_pointer<Q: ?Sized>(&self, key: &Q) -> &TreePointer<K, V>
@@ -274,6 +393,14 @@ mod tests {
         let not_element = tree.remove(&155);
 
         assert_eq!(element, Some(30.));
+        assert_eq!(not_element, None);
+
+        let element = tree.remove(&4);
+        assert_eq!(element, Some(40.));
+        assert_eq!(not_element, None);
+
+        let element = tree.remove(&5);
+        assert_eq!(element, Some(50.));
         assert_eq!(not_element, None);
     }
 

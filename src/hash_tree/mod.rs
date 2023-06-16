@@ -214,6 +214,10 @@ impl<'a, K, V> Iterator for TreeIter<'a, K, V> {
     }
 }
 
+// ───── HashTree ─────────────────────────────────────────────────────────── //
+// TODO: create HashTree iterator
+// TODO: create iterator that will consume the value
+
 /// `HashTree` is a collection of pairs which are sorted by hash,
 /// generated for every key.
 pub struct HashTree<K, V> {
@@ -360,7 +364,6 @@ mod tests {
     use super::TreePointer::*;
     use super::*;
 
-    // TODO: create iterator that will consume the value
     #[test]
     fn test_nodes_creation() {
         // Create a small tree

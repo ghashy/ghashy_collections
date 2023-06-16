@@ -4,19 +4,62 @@
     trivial_casts,
     trivial_numeric_casts,
     unstable_features,
+    unsafe_code,
     unused_import_braces,
     unused_qualifications,
     missing_docs
 )]
 
-// ───── Body ─────────────────────────────────────────────────────────────── //
+// ───── TreePointer && TreeNode ──────────────────────────────────────────── //
+
+struct TreeNode<K, V> {
+    hash: u64,
+    key: K,
+    value: V,
+    left: TreePointer<K, V>,
+    right: TreePointer<K, V>,
+}
 
 enum TreePointer<K, V> {
     Empty,
     NonEmpty(Box<TreeNode<K, V>>),
 }
 
+impl<K, V> AsRef<Box<TreeNode<K, V>>> for TreePointer<K, V> {
+    fn as_ref(&self) -> &Box<TreeNode<K, V>> {
+        match *self {
+            TreePointer::Empty => panic!(),
+            TreePointer::NonEmpty(ref node) => node,
+        }
+    }
+}
+
+impl<K, V> AsMut<Box<TreeNode<K, V>>> for TreePointer<K, V> {
+    fn as_mut(&mut self) -> &mut Box<TreeNode<K, V>> {
+        match *self {
+            TreePointer::NonEmpty(ref mut node) => node,
+            TreePointer::Empty => panic!(),
+        }
+    }
+}
+
 impl<K, V> TreePointer<K, V> {
+    fn new(
+        left: TreePointer<K, V>,
+        key: K,
+        hash: u64,
+        value: V,
+        right: TreePointer<K, V>,
+    ) -> TreePointer<K, V> {
+        TreePointer::NonEmpty(Box::new(TreeNode {
+            hash,
+            key,
+            value,
+            left,
+            right,
+        }))
+    }
+
     fn take(&mut self) -> Self {
         use TreePointer::*;
 
@@ -42,30 +85,8 @@ impl<K, V> TreePointer<K, V> {
         }
     }
 
-    fn as_ref(&self) -> Option<&Box<TreeNode<K, V>>> {
-        match *self {
-            TreePointer::Empty => None,
-            TreePointer::NonEmpty(ref node) => Some(node),
-        }
-    }
-
-    fn as_mut(&mut self) -> Option<&mut Box<TreeNode<K, V>>> {
-        match *self {
-            TreePointer::NonEmpty(ref mut x) => Some(x),
-            TreePointer::Empty => None,
-        }
-    }
-
     fn replace(&mut self, new: TreePointer<K, V>) -> TreePointer<K, V> {
         std::mem::replace(self, new)
-    }
-
-    fn iter(&self) -> TreeIter<K, V> {
-        let mut iter = TreeIter {
-            unvisited: Vec::new(),
-        };
-        iter.push_left_edge(self);
-        iter
     }
 
     fn extract_min(&mut self) -> Option<(K, u64, V)> {
@@ -74,8 +95,8 @@ impl<K, V> TreePointer<K, V> {
         if self.is_non_empty() {
             let mut current = self;
 
-            while current.as_ref().unwrap().left.is_non_empty() {
-                current = &mut current.as_mut().unwrap().left;
+            while current.as_ref().left.is_non_empty() {
+                current = &mut current.as_mut().left;
             }
 
             let temp = current.take().unwrap();
@@ -95,44 +116,50 @@ impl<K, V> TreePointer<K, V> {
         while let NonEmpty(ref mut node) = current {
             match node.hash.cmp(&hash) {
                 std::cmp::Ordering::Less => {
-                    current = &mut current.as_mut().unwrap().right
+                    current = &mut current.as_mut().right
                 }
                 std::cmp::Ordering::Greater => {
-                    current = &mut current.as_mut().unwrap().left
+                    current = &mut current.as_mut().left
                 }
-                std::cmp::Ordering::Equal => {
-                    match (node.left.as_mut(), node.right.as_mut()) {
-                        (None, None) => {
-                            result = Some(current.replace(Empty));
-                        }
-                        (Some(_), None) => {
-                            let take = node.left.take();
-                            result = Some(current.replace(take));
-                        }
-                        (None, Some(_)) => {
-                            let take = node.right.take();
-                            result = Some(current.replace(take));
-                        }
-                        (Some(_), Some(_)) => {
-                            let mut temp = node.right.extract_min().unwrap();
-                            let cur = current.as_mut().unwrap();
-                            std::mem::swap(&mut cur.key, &mut temp.0);
-                            std::mem::swap(&mut cur.hash, &mut temp.1);
-                            std::mem::swap(&mut cur.value, &mut temp.2);
-
-                            result = Some(NonEmpty(Box::new(TreeNode {
-                                key: temp.0,
-                                hash: temp.1,
-                                value: temp.2,
-                                left: Empty,
-                                right: Empty,
-                            })));
-                        }
+                std::cmp::Ordering::Equal => match (&node.left, &node.right) {
+                    (Empty, Empty) => {
+                        result = Some(current.replace(Empty));
                     }
-                }
+                    (NonEmpty(_), Empty) => {
+                        let take = node.left.take();
+                        result = Some(current.replace(take));
+                    }
+                    (Empty, NonEmpty(_)) => {
+                        let take = node.right.take();
+                        result = Some(current.replace(take));
+                    }
+                    (NonEmpty(_), NonEmpty(_)) => {
+                        let mut temp = node.right.extract_min().unwrap();
+                        let cur = current.as_mut();
+                        std::mem::swap(&mut cur.key, &mut temp.0);
+                        std::mem::swap(&mut cur.hash, &mut temp.1);
+                        std::mem::swap(&mut cur.value, &mut temp.2);
+
+                        result = Some(NonEmpty(Box::new(TreeNode {
+                            key: temp.0,
+                            hash: temp.1,
+                            value: temp.2,
+                            left: Empty,
+                            right: Empty,
+                        })));
+                    }
+                },
             }
         }
         result
+    }
+
+    fn iter(&self) -> TreeIter<K, V> {
+        let mut iter = TreeIter {
+            unvisited: Vec::new(),
+        };
+        iter.push_left_edge(self);
+        iter
     }
 }
 
@@ -144,13 +171,7 @@ impl<'a, K: 'a, V: 'a> IntoIterator for &'a TreePointer<K, V> {
     }
 }
 
-struct TreeNode<K, V> {
-    hash: u64,
-    key: K,
-    value: V,
-    left: TreePointer<K, V>,
-    right: TreePointer<K, V>,
-}
+// ───── TreeIter ─────────────────────────────────────────────────────────── //
 
 /// State of symmetrical iteration of `BinaryTree`
 struct TreeIter<'a, K: 'a, V: 'a> {
@@ -191,22 +212,6 @@ impl<'a, K, V> Iterator for TreeIter<'a, K, V> {
         // Create the reference to the value of this node
         Some((&node.key, &node.value))
     }
-}
-
-fn make_node<K, V>(
-    left: TreePointer<K, V>,
-    key: K,
-    hash: u64,
-    value: V,
-    right: TreePointer<K, V>,
-) -> TreePointer<K, V> {
-    TreePointer::NonEmpty(Box::new(TreeNode {
-        hash,
-        key,
-        value,
-        left,
-        right,
-    }))
 }
 
 /// `HashTree` is a collection of pairs which are sorted by hash,
@@ -251,7 +256,7 @@ where
         loop {
             match parent {
                 TreePointer::Empty => {
-                    *parent = make_node(
+                    *parent = TreePointer::new(
                         TreePointer::Empty,
                         key,
                         hash,
@@ -501,37 +506,42 @@ mod tests {
 
     fn generate_unhashed_tree<'a>() -> TreePointer<&'a str, &'a str> {
         let state = RandomState::new();
-        let subtree_l =
-            make_node(Empty, "mecha", state.hash_one("mecha"), "mechaV", Empty);
-        let subtree_rlrl = make_node(
+        let subtree_l = TreePointer::new(
+            Empty,
+            "mecha",
+            state.hash_one("mecha"),
+            "mechaV",
+            Empty,
+        );
+        let subtree_rlrl = TreePointer::new(
             Empty,
             "GingerBread",
             state.hash_one("GingerBread"),
             "GingerBreadV",
             Empty,
         );
-        let subtree_rlr = make_node(
+        let subtree_rlr = TreePointer::new(
             subtree_rlrl,
             "Android",
             state.hash_one("Android"),
             "AndroidV",
             Empty,
         );
-        let subtree_rl = make_node(
+        let subtree_rl = TreePointer::new(
             Empty,
             "droid",
             state.hash_one("droid"),
             "droidV",
             subtree_rlr,
         );
-        let subtree_r = make_node(
+        let subtree_r = TreePointer::new(
             subtree_rl,
             "robot",
             state.hash_one("robot"),
             "robotV",
             Empty,
         );
-        let tree = make_node(
+        let tree = TreePointer::new(
             subtree_l,
             "Jaeger",
             state.hash_one("Jaeger"),

@@ -5,11 +5,13 @@ use ghashy_collections::hash_tree::*;
 // ───── Body ─────────────────────────────────────────────────────────────── //
 
 fn main() {
+    test_visually();
+
+    println!("\nBenchmark: \n");
     benchmark();
 }
 
 fn benchmark() {
-    // let size = 100;
     let size = 1000000;
 
     // HashTree
@@ -52,4 +54,40 @@ fn benchmark() {
         "HashMap with ahash: {} microseconds",
         now.elapsed().as_micros()
     );
+}
+
+fn test_visually() {
+    let mut tree = HashTree::new_with_seed(1);
+
+    // These are random words
+    tree.insert("mecha", "mechaV");
+    tree.insert("Jaeger", "JaegerV");
+    tree.insert("droid", "droidV");
+    tree.insert("GingerBread", "GingerBreadV");
+    tree.insert("Android", "AndroidV");
+    tree.insert("robot", "robotV");
+    tree.insert("robot", "robotV");
+    tree.insert("ios", "iosV");
+    tree.insert("windows", "windowsV");
+    tree.insert("linux", "linuxV");
+    tree.insert("blackberry", "blackberryV");
+    tree.insert("bevy", "bevyV");
+    tree.insert("rust", "rustV");
+    tree.insert("meow", "meowV");
+    tree.insert("black", "blackV");
+    tree.insert("red", "redV");
+    tree.insert("purple", "purpleV");
+    tree.insert("green", "greenV");
+    tree.insert("blue", "blueV");
+    tree.insert("sun", "sunV");
+    tree.insert("moon", "moonV");
+    tree.insert("earth", "earthV");
+    tree.insert("sword", "swordV");
+    tree.insert("bow", "bowV");
+    tree.insert("knife", "knifeV");
+    tree.insert("t", "tV");
+
+    tree.remove("droid");
+
+    dbg!(tree);
 }

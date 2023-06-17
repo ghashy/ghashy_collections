@@ -44,13 +44,7 @@ impl<K, V> AsMut<Box<TreeNode<K, V>>> for TreePointer<K, V> {
 }
 
 impl<K, V> TreePointer<K, V> {
-    fn new(
-        left: TreePointer<K, V>,
-        key: K,
-        hash: u64,
-        value: V,
-        right: TreePointer<K, V>,
-    ) -> TreePointer<K, V> {
+    fn new(left: Self, key: K, hash: u64, value: V, right: Self) -> Self {
         TreePointer::NonEmpty(Box::new(TreeNode {
             hash,
             key,
@@ -61,11 +55,11 @@ impl<K, V> TreePointer<K, V> {
     }
 
     fn take(&mut self) -> Self {
-        use TreePointer::*;
-
         match self {
-            Empty => Self::Empty,
-            NonEmpty(_) => std::mem::replace(self, Empty),
+            TreePointer::Empty => Self::Empty,
+            TreePointer::NonEmpty(_) => {
+                std::mem::replace(self, TreePointer::Empty)
+            }
         }
     }
 
@@ -85,7 +79,7 @@ impl<K, V> TreePointer<K, V> {
         }
     }
 
-    fn replace(&mut self, new: TreePointer<K, V>) -> TreePointer<K, V> {
+    fn replace(&mut self, new: Self) -> Self {
         std::mem::replace(self, new)
     }
 
@@ -106,40 +100,51 @@ impl<K, V> TreePointer<K, V> {
         node
     }
 
-    fn remove(&mut self, hash: u64) -> Option<TreePointer<K, V>> {
+    fn remove(&mut self, hash: u64) -> Option<Self> {
+        use std::cmp::Ordering::*;
         use TreePointer::*;
 
         let mut current = self;
 
         let mut result = None;
 
+        // A destructuring of `current` into its components. This doesn't
+        // borrow `current` as a whole, it just borrows `node`.
+        // So we can do this: current = &mut current.as_mut().*, inside the
+        // cycle.
         while let NonEmpty(ref mut node) = current {
             match node.hash.cmp(&hash) {
-                std::cmp::Ordering::Less => {
-                    current = &mut current.as_mut().right
-                }
-                std::cmp::Ordering::Greater => {
-                    current = &mut current.as_mut().left
-                }
-                std::cmp::Ordering::Equal => match (&node.left, &node.right) {
+                Less => current = &mut current.as_mut().right,
+                Greater => current = &mut current.as_mut().left,
+                Equal => match (&node.left, &node.right) {
                     (Empty, Empty) => {
+                        // Removing edge node, easiest case
                         result = Some(current.replace(Empty));
                     }
                     (NonEmpty(_), Empty) => {
+                        // Replace current with left node, if right is `Empty`
                         let take = node.left.take();
                         result = Some(current.replace(take));
                     }
                     (Empty, NonEmpty(_)) => {
+                        // Same, but with right node
                         let take = node.right.take();
                         result = Some(current.replace(take));
                     }
                     (NonEmpty(_), NonEmpty(_)) => {
+                        // Complicated case
+                        //
+                        // Take our minimal node from right, write it's
+                        // data into `temp` variable, and then place on it's
+                        // place it's right node.
                         let mut temp = node.right.extract_min().unwrap();
                         let cur = current.as_mut();
+                        // Write our taken data into target node
                         std::mem::swap(&mut cur.key, &mut temp.0);
                         std::mem::swap(&mut cur.hash, &mut temp.1);
                         std::mem::swap(&mut cur.value, &mut temp.2);
 
+                        // Return removed data
                         result = Some(NonEmpty(Box::new(TreeNode {
                             key: temp.0,
                             hash: temp.1,
@@ -161,6 +166,14 @@ impl<K, V> TreePointer<K, V> {
         iter.push_left_edge(self);
         iter
     }
+
+    fn debug_iter(&self) -> TreeDebugIter<K, V> {
+        let mut iter = TreeDebugIter {
+            unvisited: Vec::new(),
+        };
+        iter.push_left_edge(self);
+        iter
+    }
 }
 
 impl<'a, K: 'a, V: 'a> IntoIterator for &'a TreePointer<K, V> {
@@ -174,7 +187,7 @@ impl<'a, K: 'a, V: 'a> IntoIterator for &'a TreePointer<K, V> {
 // ───── TreeIter ─────────────────────────────────────────────────────────── //
 
 /// State of symmetrical iteration of `BinaryTree`
-struct TreeIter<'a, K: 'a, V: 'a> {
+pub struct TreeIter<'a, K: 'a, V: 'a> {
     /// Stack references to `TreeNode`'s.
     ///
     /// Since we are using methods `push` and
@@ -214,9 +227,50 @@ impl<'a, K, V> Iterator for TreeIter<'a, K, V> {
     }
 }
 
+// ───── TreeDebugIter ────────────────────────────────────────────────────── //
+
+/// State of symmetrical iteration of `BinaryTree`
+struct TreeDebugIter<'a, K: 'a, V: 'a> {
+    /// Stack references to `TreeNode`'s.
+    ///
+    /// Since we are using methods `push` and
+    /// `pop` of type Vec, the top of the stack is the end of the Vec.
+    ///
+    /// Node, which will be next in iteration, is placing on top of the stack,
+    /// but his ancestors, which were not visited by iteration - on the bottom.
+    /// If the stack is empty, iteration is finished.
+    unvisited: Vec<&'a TreeNode<K, V>>,
+}
+
+impl<'a, K: 'a, V: 'a> TreeDebugIter<'a, K, V> {
+    fn push_left_edge(&mut self, mut tree_ptr: &'a TreePointer<K, V>) {
+        while let TreePointer::NonEmpty(ref node) = *tree_ptr {
+            self.unvisited.push(node.as_ref());
+            tree_ptr = &node.left;
+        }
+    }
+}
+
+impl<'a, K, V> Iterator for TreeDebugIter<'a, K, V> {
+    type Item = &'a TreeNode<K, V>;
+    fn next(&mut self) -> Option<Self::Item> {
+        // Find node, which will be returned by this iteration, or stop
+        // iteration.
+        let node = match self.unvisited.pop() {
+            None => return None,
+            Some(n) => n,
+        };
+
+        // Next node will be the leftmost descedant of right son of this node,
+        // so place the path to him in the stack.
+        self.push_left_edge(&node.right);
+
+        // Create the reference to the value of this node
+        Some(node)
+    }
+}
+
 // ───── HashTree ─────────────────────────────────────────────────────────── //
-// TODO: create HashTree iterator
-// TODO: create iterator that will consume the value
 
 /// `HashTree` is a collection of pairs which are sorted by hash,
 /// generated for every key.
@@ -253,7 +307,7 @@ where
     /// `HashTree`, the old value is returned, otherwise None is returned.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         // Generate hash for key
-        let hash = self.state.hash_one(&key);
+        let hash = self.state.hash_one(std::borrow::Borrow::borrow(&key));
 
         // If BinaryTree is empty, create root node
         let mut parent = &mut self.root;
@@ -313,6 +367,11 @@ where
         }
     }
 
+    /// Get iterator for `HashTree`
+    pub fn iter<'a>(&'a mut self) -> TreeIter<'a, K, V> {
+        self.root.iter()
+    }
+
     fn find_pointer<Q: ?Sized>(&self, key: &Q) -> &TreePointer<K, V>
     where
         K: std::borrow::Borrow<Q>,
@@ -336,6 +395,42 @@ where
                 },
                 TreePointer::Empty => return parent,
             }
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> IntoIterator for &'a HashTree<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = TreeIter<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.root.iter()
+    }
+}
+
+impl<K, V> std::fmt::Debug for HashTree<K, V>
+where
+    K: std::fmt::Display,
+    V: std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut result = Err(std::fmt::Error);
+        for item in self.root.debug_iter() {
+            let left = match &item.left {
+                TreePointer::Empty => format!("Empty"),
+                TreePointer::NonEmpty(node) => format!("key is {}", node.key),
+            };
+            let right = match &item.right {
+                TreePointer::Empty => format!("Empty"),
+                TreePointer::NonEmpty(node) => format!("key is {}", node.key),
+            };
+            result = f.write_str(&format!(
+                "\n\nHash: {}\nKey: {}\nValue: {}\nLeft: {}\nRight: {}",
+                item.hash, item.key, item.value, left, right
+            ));
+        }
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 }
@@ -370,10 +465,7 @@ mod tests {
         let pointer = generate_unhashed_tree();
 
         // Iterate it
-        let v: Vec<_> = pointer
-            .iter()
-            .map(|(s1, s2)| (s1.clone(), s2.clone()))
-            .collect();
+        let v: Vec<_> = pointer.iter().map(|(&s1, &s2)| (s1, s2)).collect();
 
         assert_eq!(
             v,
@@ -493,6 +585,106 @@ mod tests {
         let tree = create_tree();
 
         assert_eq!(tree["mecha"], "mechaV");
+    }
+
+    #[test]
+    fn test_removing_node_order() {
+        let mut tree = HashTree::new_with_seed(1);
+
+        // These are random words
+        // Scheme of binary tree in diagrams folder
+        tree.insert("mecha", "mechaV");
+        tree.insert("Jaeger", "JaegerV");
+        tree.insert("droid", "droidV");
+        tree.insert("GingerBread", "GingerBreadV");
+        tree.insert("Android", "AndroidV");
+        tree.insert("robot", "robotV");
+        tree.insert("robot", "robotV");
+        tree.insert("ios", "iosV");
+        tree.insert("windows", "windowsV");
+        tree.insert("linux", "linuxV");
+        tree.insert("blackberry", "blackberryV");
+        tree.insert("bevy", "bevyV");
+        tree.insert("rust", "rustV");
+        tree.insert("meow", "meowV");
+        tree.insert("black", "blackV");
+        tree.insert("red", "redV");
+        tree.insert("purple", "purpleV");
+        tree.insert("green", "greenV");
+        tree.insert("blue", "blueV");
+        tree.insert("sun", "sunV");
+        tree.insert("moon", "moonV");
+        tree.insert("earth", "earthV");
+        tree.insert("sword", "swordV");
+        tree.insert("bow", "bowV");
+        tree.insert("knife", "knifeV");
+        tree.insert("t", "tV");
+
+        assert_eq!(
+            tree.iter().map(|(&k, _)| k).collect::<Vec<_>>(),
+            vec![
+                "red",
+                "moon",
+                "bevy",
+                "robot",
+                "meow",
+                "green",
+                "sword",
+                "purple",
+                "knife",
+                "droid",
+                "blue",
+                "t",
+                "windows",
+                "rust",
+                "linux",
+                "mecha",
+                "blackberry",
+                "sun",
+                "GingerBread",
+                "Android",
+                "ios",
+                "earth",
+                "bow",
+                "Jaeger",
+                "black"
+            ]
+        );
+
+        let removed = tree.remove("droid").unwrap();
+        assert_eq!(removed, "droidV");
+
+        let removed = tree.remove("GingerBread").unwrap();
+        assert_eq!(removed, "GingerBreadV");
+
+        assert_eq!(
+            tree.iter().map(|(&k, _)| k).collect::<Vec<_>>(),
+            vec![
+                "red",
+                "moon",
+                "bevy",
+                "robot",
+                "meow",
+                "green",
+                "sword",
+                "purple",
+                "knife",
+                "blue",
+                "t",
+                "windows",
+                "rust",
+                "linux",
+                "mecha",
+                "blackberry",
+                "sun",
+                "Android",
+                "ios",
+                "earth",
+                "bow",
+                "Jaeger",
+                "black"
+            ]
+        );
     }
 
     fn create_tree<'a>() -> HashTree<&'a str, &'a str> {
